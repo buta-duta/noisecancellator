@@ -1,8 +1,10 @@
 import ctypes
 import threading
+import time
 from ctypes import wintypes
 
-from clarity.hotkey import NumLockEightChord
+from clarity.hotkey import VK_NUMLOCK, NumLockEightChord, numlock_is_physically_down
+from clarity.persist import log
 
 WH_KEYBOARD_LL = 13
 WM_KEYDOWN = 0x0100
@@ -12,6 +14,7 @@ WM_SYSKEYUP = 0x0105
 WM_QUIT = 0x0012
 HC_ACTION = 0
 LLKHF_UP = 0x80
+PM_NOREMOVE = 0
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -61,6 +64,10 @@ user32.DispatchMessageW.argtypes = [ctypes.POINTER(MSG)]
 user32.DispatchMessageW.restype = LRESULT
 user32.PostThreadMessageW.argtypes = [wintypes.DWORD, wintypes.UINT, ctypes.c_size_t, ctypes.c_ssize_t]
 user32.PostThreadMessageW.restype = wintypes.BOOL
+user32.PeekMessageW.argtypes = [ctypes.POINTER(MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT, wintypes.UINT]
+user32.PeekMessageW.restype = wintypes.BOOL
+user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+user32.GetAsyncKeyState.restype = ctypes.c_short
 kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
 kernel32.GetModuleHandleW.restype = wintypes.HINSTANCE
 kernel32.GetCurrentThreadId.restype = wintypes.DWORD
@@ -82,17 +89,29 @@ class KeyboardHook:
             try:
                 info = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
                 is_up = bool(info.flags & LLKHF_UP) or w_param in (WM_KEYUP, WM_SYSKEYUP)
-                decision = self.chord.on_key(info.vkCode, info.scanCode, not is_up)
+                held = None
+                if info.vkCode != VK_NUMLOCK:
+                    held = numlock_is_physically_down(user32.GetAsyncKeyState(VK_NUMLOCK))
+                decision = self.chord.on_key(
+                    info.vkCode,
+                    info.scanCode,
+                    not is_up,
+                    numlock_held=held,
+                    now=time.monotonic(),
+                )
                 if decision.toggle and self._toggle is not None:
                     self._toggle()
                 if decision.swallow:
                     return 1
-            except Exception:
-                return user32.CallNextHookEx(None, n_code, w_param, l_param)
-        return user32.CallNextHookEx(None, n_code, w_param, l_param)
+            except Exception as exc:
+                log(f"hook vk={getattr(locals().get('info', None), 'vkCode', '?')} {exc}")
+                return user32.CallNextHookEx(self._hook, n_code, w_param, l_param)
+        return user32.CallNextHookEx(self._hook, n_code, w_param, l_param)
 
     def _loop(self):
         self._thread_id = kernel32.GetCurrentThreadId()
+        message = MSG()
+        user32.PeekMessageW(ctypes.byref(message), None, 0, 0, PM_NOREMOVE)
         module = kernel32.GetModuleHandleW(None)
         self._hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, self._proc, module, 0)
         if not self._hook:
@@ -100,7 +119,6 @@ class KeyboardHook:
             self._ready.set()
             return
         self._ready.set()
-        message = MSG()
         while True:
             code = user32.GetMessageW(ctypes.byref(message), None, 0, 0)
             if code <= 0:
@@ -119,6 +137,7 @@ class KeyboardHook:
             raise RuntimeError("keyboard hook did not start")
         if not self._hook:
             raise RuntimeError(f"keyboard hook failed ({self._error})")
+        log("hook installed")
 
     def stop(self):
         if self._thread_id:

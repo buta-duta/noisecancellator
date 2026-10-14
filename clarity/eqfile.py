@@ -1,7 +1,6 @@
 import os
 
 from clarity.dsp import clarity_config
-from clarity.persist import app_dir
 
 
 def eq_path():
@@ -9,15 +8,14 @@ def eq_path():
     if override:
         return override
     folder = os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "EqualizerAPO", "config")
-    if os.path.isdir(folder):
-        return os.path.join(folder, "clarity.txt")
-    return os.path.join(app_dir(), "clarity.txt")
+    return os.path.join(folder, "clarity.txt")
 
 
 def write_eq(enabled):
     path = eq_path()
     folder = os.path.dirname(path)
-    os.makedirs(folder, exist_ok=True)
+    if not os.path.isdir(folder):
+        raise OSError(f"Equalizer APO config folder is missing: {folder}")
     text = clarity_config(enabled)
     temp = path + ".tmp"
     with open(temp, "w", encoding="utf-8", newline="") as handle:

@@ -20,4 +20,4 @@ Setup creates `.venv`, installs `requirements.txt`, and installs Equalizer APO 1
 .\.venv\Scripts\python.exe .\main.py
 ```
 
-Leave that process running. Num Lock alone still toggles the keyboard light. A corner note shows `Clarity on` or `Clarity off` for 1.35 seconds. That note does not appear when a saved on/off state is restored at startup.
+Leave that process running. Hold Num Lock and press 8, or press 8 within a moment of tapping Num Lock. The number row and the numpad both count. Num Lock alone still toggles the keyboard light. A corner note shows `Clarity on` or `Clarity off` for 1.35 seconds. That note does not appear when a saved on/off state is restored at startup.

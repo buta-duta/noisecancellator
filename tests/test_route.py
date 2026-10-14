@@ -3,18 +3,26 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from clarity.devices import default_render
+from clarity.dsp import PRESENCE_DB, PREAMP_DB, clarity_config
 from clarity.engine import Engine
 
 
 class RouteTests(unittest.TestCase):
-    def test_toggle_does_not_move_default_or_open_loopback(self):
-        engine_source = Path(__file__).resolve().parents[1].joinpath("clarity", "engine.py").read_text(encoding="utf-8")
-        tray_source = Path(__file__).resolve().parents[1].joinpath("clarity", "tray.py").read_text(encoding="utf-8")
-        self.assertNotIn("DeviceLoopback", engine_source)
-        self.assertNotIn("SetDefaultDevice", engine_source)
-        self.assertNotIn("SetDefaultDevice", tray_source)
-        before = default_render().id
+    def test_toggle_writes_eq_without_com(self):
+        root = Path(__file__).resolve().parents[1]
+        for name in ("engine.py", "tray.py", "hook.py"):
+            text = (root / "clarity" / name).read_text(encoding="utf-8")
+            self.assertNotIn("pycaw", text)
+            self.assertNotIn("restore_route", text)
+            self.assertNotIn("pick_pair", text)
+        tray = (root / "clarity" / "tray.py").read_text(encoding="utf-8")
+        self.assertNotIn("SetDefaultDevice", tray)
+        self.assertIn("hook.start", tray)
+        on = clarity_config(True)
+        self.assertIn("Preamp: 0.0 dB", on)
+        self.assertIn("Gain 3.5 dB", on)
+        self.assertEqual(PREAMP_DB, 0.0)
+        self.assertEqual(PRESENCE_DB, 3.5)
         folder = tempfile.mkdtemp()
         target = os.path.join(folder, "clarity.txt")
         previous = os.environ.get("CLARITY_EQ_FILE")
@@ -24,13 +32,12 @@ class RouteTests(unittest.TestCase):
             ok, message = engine.start()
             self.assertTrue(ok, message)
             self.assertEqual(engine.latency_ms, 0.0)
-            self.assertEqual(default_render().id, before)
-            self.assertNotIn("loop", engine.__dict__)
-            text = Path(target).read_text(encoding="utf-8").casefold()
-            self.assertIn("filter:", text)
+            text = Path(target).read_text(encoding="utf-8")
+            self.assertIn("Filter:", text)
+            self.assertIn("Preamp: 0.0 dB", text)
+            self.assertIn("Gain 3.5 dB", text)
             stopped, stop_message = engine.stop()
             self.assertTrue(stopped, stop_message)
-            self.assertEqual(default_render().id, before)
             off = Path(target).read_text(encoding="utf-8").casefold()
             self.assertNotIn("filter:", off)
         finally:

@@ -3,6 +3,12 @@ VK_8 = 0x38
 VK_NUMPAD8 = 0x68
 VK_UP = 0x26
 SCAN_NUM8 = 0x48
+NUMLOCK_DOWN_BIT = 0x8000
+NUMLOCK_WINDOW_S = 0.4
+
+
+def numlock_is_physically_down(async_state):
+    return bool(int(async_state) & NUMLOCK_DOWN_BIT)
 
 
 class ChordDecision:
@@ -12,10 +18,9 @@ class ChordDecision:
 
 
 class NumLockEightChord:
-    # Physical Num Lock is tracked separately from the LED. The Num Lock key
-    # itself is never swallowed, so Windows still toggles the lock state.
     def __init__(self):
         self.numlock_down = False
+        self.numlock_up_at = None
         self.held = set()
         self.latched = False
 
@@ -29,23 +34,36 @@ class NumLockEightChord:
             return "pad8"
         return None
 
-    def on_key(self, vk, scan, is_down):
+    def _recent(self, now):
+        if now is None or self.numlock_up_at is None:
+            return False
+        return (now - self.numlock_up_at) <= NUMLOCK_WINDOW_S
+
+    def _armed(self, numlock_held, now):
+        return self.numlock_down or bool(numlock_held) or self._recent(now)
+
+    def on_key(self, vk, scan, is_down, numlock_held=None, now=None):
         vk = int(vk)
         if vk == VK_NUMLOCK:
             self.numlock_down = bool(is_down)
+            if is_down:
+                self.numlock_up_at = None
+            else:
+                self.numlock_up_at = now
             return ChordDecision(False, False)
         kid = self._eight_id(vk, scan)
         if kid is None:
             return ChordDecision(False, False)
+        armed = self._armed(numlock_held, now)
         if is_down:
             repeat = kid in self.held
             self.held.add(kid)
             if repeat:
-                return ChordDecision(self.numlock_down or self.latched, False)
-            if self.numlock_down and not self.latched:
+                return ChordDecision(armed or self.latched, False)
+            if armed and not self.latched:
                 self.latched = True
                 return ChordDecision(True, True)
-            if self.numlock_down or self.latched:
+            if armed or self.latched:
                 return ChordDecision(True, False)
             return ChordDecision(False, False)
         self.held.discard(kid)

@@ -27,7 +27,7 @@ class DspTests(unittest.TestCase):
         processor = ClarityProcessor(fs)
         t = np.arange(fs) / fs
         for freq in (100.0, 1000.0, 3000.0, 12000.0):
-            wave = np.sin(2.0 * np.pi * freq * t)
+            wave = 0.4 * np.sin(2.0 * np.pi * freq * t)
             audio = np.stack([wave, wave], axis=1)
             out = processor.process(audio, enabled=True)
             steady = out[int(0.2 * fs) :]

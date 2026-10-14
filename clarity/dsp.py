@@ -3,10 +3,9 @@ import math
 import numpy as np
 from scipy.signal import sosfilt
 
-# Bypass returns the same array. The chain is minimum-phase biquads only.
-PREAMP_DB = -3.0
+PREAMP_DB = 0.0
 PRESENCE_HZ = 3200.0
-PRESENCE_DB = 2.0
+PRESENCE_DB = 3.5
 PRESENCE_Q = 0.65
 LOW_SHELF_HZ = 120.0
 LOW_SHELF_DB = -2.5

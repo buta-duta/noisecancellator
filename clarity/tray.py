@@ -1,15 +1,19 @@
 import ctypes
+import os
 import threading
+import time
 from ctypes import wintypes
+from pathlib import Path
 
+import psutil
 import pystray
 from PIL import Image, ImageDraw
 
 from clarity.engine import Engine
+from clarity.eqfile import eq_path
 from clarity.hook import KeyboardHook
 from clarity.notice import notice_label, show_notice
 from clarity.persist import load_enabled, log, save_enabled
-from clarity.routing import restore_route
 
 STATUS = "Outside noise is reduced by the silicone seal; this mode keeps playback clear."
 HOTKEY = "Num Lock + 8"
@@ -29,10 +33,43 @@ def _icon(active):
     return image
 
 
+def _repo_main():
+    return str(Path(__file__).resolve().parents[1] / "main.py")
+
+
+def replace_existing():
+    me = os.getpid()
+    parent = os.getppid()
+    root = str(Path(__file__).resolve().parents[1]).casefold()
+    victims = []
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        pid = proc.info["pid"]
+        if pid in (me, parent):
+            continue
+        cmd = proc.info["cmdline"] or []
+        text = " ".join(cmd)
+        if "main.py" not in text.casefold():
+            continue
+        cwd = ""
+        try:
+            cwd = proc.cwd()
+        except (psutil.Error, OSError):
+            cwd = ""
+        if root in text.casefold() or root in cwd.casefold():
+            victims.append(proc)
+    for proc in victims:
+        try:
+            proc.kill()
+        except psutil.Error as exc:
+            log(exc)
+    if victims:
+        psutil.wait_procs(victims, timeout=3)
+        time.sleep(0.2)
+
+
 class App:
     def __init__(self):
         self.engine = Engine()
-        self.engine.on_failure = self._failed
         self.enabled = False
         self.icon = None
         self._state_lock = threading.Lock()
@@ -73,29 +110,25 @@ class App:
                 self.enabled = False
                 save_enabled(False)
                 self._refresh()
-                self._notify(message or "Playback processing did not start")
+                self._notify(message or "Equalizer APO config was not written")
                 return
         else:
-            self.engine.stop()
+            ok, message = self.engine.stop()
+            if not ok:
+                self._notify(message or "Equalizer APO config was not written")
+                return
         self.enabled = enabled
         save_enabled(enabled)
         self._refresh()
         if notify:
-            self._notify("On" if enabled else "Off")
             show_notice(notice_label(enabled))
-
-    def _failed(self, message):
-        self.enabled = False
-        save_enabled(False)
-        self._refresh()
-        self._notify(message)
 
     def _refresh(self):
         icon = self.icon
         if icon is None:
             return
         icon.icon = _icon(self.enabled)
-        icon.title = f"{'Clarity on — system playback' if self.enabled else 'Clarity off'} — {HOTKEY}"
+        icon.title = f"{'Clarity on' if self.enabled else 'Clarity off'} — {HOTKEY}"
         try:
             icon.update_menu()
         except Exception:
@@ -136,25 +169,24 @@ def _single_instance():
 
 
 def run_check():
-    from clarity.dsp import ClarityProcessor
-    from clarity.routing import pick_pair
-
-    listen, capture = pick_pair()
-    processor = ClarityProcessor(48000)
-    print(f"listen={listen.FriendlyName}")
-    print(f"capture={capture.FriendlyName}")
-    print(f"dsp_latency_ms={processor.latency_samples / 48.0:.2f}")
-    print("system_playback=speakers-loopback-to-headphones")
-    print("apo=not-installed")
+    path = eq_path()
+    text = ""
+    if os.path.isfile(path):
+        with open(path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+    dll = os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "EqualizerAPO", "EqualizerAPO.dll")
+    print(f"eq={path}")
+    print(f"filters={'yes' if 'filter:' in text.casefold() else 'no'}")
+    print(f"apo={'installed' if os.path.isfile(dll) else 'missing'}")
     print(STATUS)
     return 0
 
 
 def run():
+    replace_existing()
     if not _single_instance():
         print("Clarity is already running")
         return 0
-    restore_route()
     app = App()
     hook = KeyboardHook()
     icon = pystray.Icon("Clarity", _icon(False), f"Clarity off — {HOTKEY}", app.menu())
@@ -166,7 +198,12 @@ def run():
             hook.start(app.request_toggle)
         except Exception as exc:
             log(exc)
-            icon.notify(str(exc), "Clarity")
+            try:
+                icon.notify(str(exc).splitlines()[0][:180], "Clarity")
+            except Exception:
+                pass
+            icon.stop()
+            return
         if load_enabled():
             app.set_enabled(True, notify=False)
 
@@ -177,5 +214,4 @@ def run():
         app._wake.set()
         hook.stop()
         app.engine.stop()
-        restore_route()
     return 0

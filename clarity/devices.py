@@ -1,7 +1,32 @@
+import ctypes
+from ctypes import wintypes
+
+ole32 = ctypes.WinDLL("ole32")
+ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+ole32.CoInitializeEx.restype = ctypes.c_long
+_COINIT_APARTMENTTHREADED = 2
+_RPC_E_CHANGED_MODE = -2147417850
+
 from pycaw.constants import DEVICE_STATE, EDataFlow, ERole
 from pycaw.pycaw import AudioUtilities
 
-from clarity.routing import classify_name
+
+def init_com():
+    hr = int(ole32.CoInitializeEx(None, _COINIT_APARTMENTTHREADED))
+    if hr in (0, 1) or hr == _RPC_E_CHANGED_MODE:
+        return
+    raise OSError(f"CoInitializeEx failed ({hr})")
+
+
+def classify_name(name):
+    text = (name or "").casefold()
+    if "hands-free" in text or "hands free" in text:
+        return "bad"
+    if any(token in text for token in ("headphone", "наушник", "earphone", "airpod")):
+        return "phones"
+    if any(token in text for token in ("speaker", "динамик")):
+        return "speakers"
+    return "other"
 
 
 def endpoint_guid(device_id):
@@ -13,12 +38,14 @@ def endpoint_guid(device_id):
 
 
 def default_render():
+    init_com()
     enumerator = AudioUtilities.GetDeviceEnumerator()
     device = enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender.value, ERole.eConsole.value)
     return AudioUtilities.CreateDevice(device)
 
 
 def render_devices():
+    init_com()
     found = AudioUtilities.GetAllDevices(
         data_flow=EDataFlow.eRender.value,
         device_state=DEVICE_STATE.ACTIVE.value,
