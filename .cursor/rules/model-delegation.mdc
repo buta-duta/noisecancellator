@@ -1,0 +1,19 @@
+---
+description: Subagent model choice for noisecancellator / Noise cancellation
+alwaysApply: true
+---
+
+# Model delegation (this repo)
+
+When spawning subagents (`Task`), pick the model from the task type:
+
+| Task type | Model |
+|-----------|--------|
+| Routine: keep-awake/power scripts, git push, tests, small fixes, status checks, formatting | `composer-2.5` or `composer-2.5-fast` |
+| Implementation, architecture, ANC app / noisecancellator features | `cursor-grok-4.7-xhigh-fast` |
+
+Prefer the faster Composer model for clearly mechanical work; use Grok for anything that needs deep coding or system design in this project.
+
+# Concurrency
+
+At most 3 agents run at once, including the parent. Spawn at most 2 additional subagents. Prefer serial work when memory is tight.
