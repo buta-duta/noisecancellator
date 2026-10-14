@@ -25,6 +25,10 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(PRESENCE_DB, 3.5)
         folder = tempfile.mkdtemp()
         target = os.path.join(folder, "clarity.txt")
+        sibling = os.path.join(folder, "config.txt")
+        with open(sibling, "w", encoding="utf-8") as handle:
+            handle.write("Include: clarity.txt\r\n")
+        os.utime(sibling, (1, 1))
         previous = os.environ.get("CLARITY_EQ_FILE")
         os.environ["CLARITY_EQ_FILE"] = target
         engine = Engine()
@@ -36,6 +40,7 @@ class RouteTests(unittest.TestCase):
             self.assertIn("Filter:", text)
             self.assertIn("Preamp: 0.0 dB", text)
             self.assertIn("Gain 3.5 dB", text)
+            self.assertGreater(os.path.getmtime(sibling), 1)
             stopped, stop_message = engine.stop()
             self.assertTrue(stopped, stop_message)
             off = Path(target).read_text(encoding="utf-8").casefold()

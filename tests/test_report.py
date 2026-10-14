@@ -12,7 +12,7 @@ class ReportTests(unittest.TestCase):
             "mic_busy": "The microphone is in use by another app.",
             "mic_denied": "Windows blocked access to the microphone.",
             "output_missing": "No headphones are plugged in.",
-            "apo_not_loaded": "Noise cancellation is not loaded. Run setup.",
+            "apo_not_loaded": "Noise cancellation is not loaded. Run setup.ps1.",
             "config_missing": "Equalizer APO is not installed. Run setup.",
             "config_locked": "Could not save the Equalizer APO config.",
             "hook_failed": "Num Lock + 8 could not be registered.",

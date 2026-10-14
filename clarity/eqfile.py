@@ -23,4 +23,10 @@ def write_eq(enabled):
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temp, path)
+    sibling = os.path.join(folder, "config.txt")
+    if os.path.isfile(sibling):
+        try:
+            os.utime(sibling, None)
+        except OSError:
+            pass
     return path

@@ -11,9 +11,7 @@ DISMISS_MS = 1350
 WS_POPUP = 0x80000000
 WS_EX_TOPMOST = 0x00000008
 WS_EX_TOOLWINDOW = 0x00000080
-WS_EX_TRANSPARENT = 0x00000020
 WS_EX_NOACTIVATE = 0x08000000
-WS_EX_LAYERED = 0x00080000
 SW_SHOWNOACTIVATE = 4
 SW_HIDE = 0
 SWP_NOACTIVATE = 0x0010
@@ -24,7 +22,6 @@ WM_PAINT = 0x000F
 WM_DESTROY = 0x0002
 WM_SHOW = 0x8001
 SPI_GETWORKAREA = 0x0030
-LWA_ALPHA = 0x2
 DT_CENTER = 0x1
 DT_VCENTER = 0x4
 DT_SINGLELINE = 0x20
@@ -140,8 +137,6 @@ def _bind():
     user32.ReleaseDC.restype = ctypes.c_int
     user32.SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT, ctypes.c_void_p, wintypes.UINT]
     user32.SystemParametersInfoW.restype = wintypes.BOOL
-    user32.SetLayeredWindowAttributes.argtypes = [wintypes.HWND, wintypes.DWORD, wintypes.BYTE, wintypes.DWORD]
-    user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
     user32.SetWindowRgn.argtypes = [wintypes.HWND, wintypes.HRGN, wintypes.BOOL]
     user32.SetWindowRgn.restype = ctypes.c_int
     user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
@@ -271,6 +266,11 @@ class _Host:
             self._paint()
             return 0
         if msg == 0x0014:
+            rect = RECT()
+            user32.GetClientRect(hwnd, ctypes.byref(rect))
+            brush = gdi32.CreateSolidBrush(0x00221E1C)
+            user32.FillRect(wparam, ctypes.byref(rect), brush)
+            gdi32.DeleteObject(brush)
             return 1
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
@@ -280,6 +280,7 @@ class _Host:
         klass.style = CS_HREDRAW | CS_VREDRAW
         klass.lpfnWndProc = self._proc
         klass.hInstance = instance
+        klass.hbrBackground = gdi32.CreateSolidBrush(0x00221E1C)
         klass.lpszClassName = "ClarityNotice"
         user32.RegisterClassW(ctypes.byref(klass))
         self._hwnd = user32.CreateWindowExW(

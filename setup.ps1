@@ -1,29 +1,40 @@
 param(
     [string]$Phase = "user",
     [string]$DeviceGuid = "",
-    [string]$Account = ""
+    [string]$Account = "",
+    [string]$ResultPath = ""
 )
 
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
-$PreMix = "{EACD2258-FCAC-4FF4-B36D-419E924A6D79}"
-$PostMix = "{EC1CC9CE-FAED-4822-828A-82A81A6F018F}"
-$ApoNames = @(
-    "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1",
-    "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},2",
-    "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},5",
-    "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},6",
-    "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7"
-)
-$SfxName = $ApoNames[2]
-$EfxName = $ApoNames[4]
-$ChainSfx = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},13"
-$ChainEfx = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},15"
+$Pre = "{EACD2258-FCAC-4FF4-B36D-419E924A6D79}"
+$Post = "{EC1CC9CE-FAED-4822-828A-82A81A6F018F}"
+$Fx = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d}"
+$Lfx = "$Fx,1"
+$Gfx = "$Fx,2"
+$Sfx = "$Fx,5"
+$Mfx = "$Fx,6"
+$Efx = "$Fx,7"
+$ChainSfx = "$Fx,13"
+$ChainMfx = "$Fx,14"
+$ChainEfx = "$Fx,15"
 $InstallerName = "EqualizerAPO-x64-1.4.2.exe"
 $InstallerUrl = "https://downloads.sourceforge.net/project/equalizerapo/1.4.2/EqualizerAPO-x64-1.4.2.exe"
 $InstallerSha = "7403BE7427BBE1936A40DDED082829B6E217FC4F5990FEE5CBA501F0AE055AFA"
 $ApoDll = Join-Path $env:ProgramFiles "EqualizerAPO\EqualizerAPO.dll"
 $ConfigDir = Join-Path $env:ProgramFiles "EqualizerAPO\config"
+$Modes = @(
+    @{ Name = "SFX/EFX"; PreSlot = $Sfx; PostSlot = $Efx; PreChain = $ChainSfx; PostChain = $ChainEfx },
+    @{ Name = "SFX/MFX"; PreSlot = $Sfx; PostSlot = $Mfx; PreChain = $ChainSfx; PostChain = $ChainMfx },
+    @{ Name = "LFX/GFX"; PreSlot = $Lfx; PostSlot = $Gfx; PreChain = $null; PostChain = $null }
+)
+
+function Publish([string]$Text) {
+    Write-Output $Text
+    if ($ResultPath) {
+        Add-Content -LiteralPath $ResultPath -Value $Text -Encoding utf8
+    }
+}
 
 function Test-Admin {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -31,27 +42,78 @@ function Test-Admin {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Test-HeadphoneWired([string]$Guid) {
-    $dllReady = Test-Path -LiteralPath $ApoDll
-    $configFile = Join-Path $ConfigDir "config.txt"
-    $clarityFile = Join-Path $ConfigDir "clarity.txt"
-    if (-not $dllReady -or -not (Test-Path -LiteralPath $configFile) -or -not (Test-Path -LiteralPath $clarityFile)) {
-        return $false
+function Test-ApoLoaded {
+    $out = & "$env:SystemRoot\System32\tasklist.exe" /m EqualizerAPO.dll 2>&1 | Out-String
+    if ($out -match "No tasks are running") { return $false }
+    return $out -match "EqualizerAPO\.dll"
+}
+
+function Write-ProbeWav([string]$Path) {
+    $rate = 48000
+    $count = [int]($rate * 0.08)
+    $data = New-Object System.Collections.Generic.List[byte]
+    for ($i = 0; $i -lt $count; $i++) {
+        $sample = [int]([math]::Round([math]::Sin(2 * [math]::PI * 440.0 * $i / $rate) * 0.08 * 32767))
+        $unsigned = $sample -band 65535
+        $data.Add([byte]($unsigned -band 255))
+        $data.Add([byte](($unsigned -shr 8) -band 255))
     }
-    $configText = Get-Content -LiteralPath $configFile -Raw
-    if ($configText -notmatch "(?m)^Include:\s*clarity\.txt\s*$") {
-        return $false
+    $dataSize = $data.Count
+    $stream = [System.IO.File]::Create($Path)
+    $writer = New-Object System.IO.BinaryWriter $stream
+    $writer.Write([System.Text.Encoding]::ASCII.GetBytes("RIFF"))
+    $writer.Write([int](36 + $dataSize))
+    $writer.Write([System.Text.Encoding]::ASCII.GetBytes("WAVEfmt "))
+    $writer.Write([int]16)
+    $writer.Write([int16]1)
+    $writer.Write([int16]1)
+    $writer.Write([int]$rate)
+    $writer.Write([int]($rate * 2))
+    $writer.Write([int16]2)
+    $writer.Write([int16]16)
+    $writer.Write([System.Text.Encoding]::ASCII.GetBytes("data"))
+    $writer.Write([int]$dataSize)
+    $writer.Write($data.ToArray())
+    $writer.Close()
+    $stream.Close()
+}
+
+function Invoke-AudiodgProbe {
+    $wav = Join-Path $env:TEMP "clarity-apo-probe.wav"
+    if (-not (Test-Path -LiteralPath $wav)) { Write-ProbeWav $wav }
+    for ($try = 0; $try -lt 4; $try++) {
+        try {
+            $player = New-Object System.Media.SoundPlayer $wav
+            $player.PlaySync()
+            return
+        } catch {
+            Start-Sleep -Seconds 1
+        }
     }
-    $fxPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\$Guid\FxProperties"
-    if (-not (Test-Path -LiteralPath $fxPath)) {
-        return $false
+}
+
+function Wait-ApoLoaded {
+    for ($i = 0; $i -lt 6; $i++) {
+        Invoke-AudiodgProbe
+        Start-Sleep -Seconds 1
+        if (Test-ApoLoaded) { return $true }
     }
-    $key = Get-Item -LiteralPath $fxPath
-    $sfx = [string]$key.GetValue($SfxName)
-    $efx = [string]$key.GetValue($EfxName)
-    $chain13 = @($key.GetValue($ChainSfx))
-    $chain15 = @($key.GetValue($ChainEfx))
-    return ($sfx -eq $PreMix -and $efx -eq $PostMix -and ($chain13 -contains $PreMix) -and ($chain15 -contains $PostMix))
+    return $false
+}
+
+function Restart-WindowsAudio {
+    try {
+        Restart-Service -Name Audiosrv -Force -ErrorAction Stop
+    } catch {
+        Stop-Service -Name Audiosrv -Force -ErrorAction SilentlyContinue
+        Start-Service -Name AudioEndpointBuilder
+        Start-Service -Name Audiosrv
+    }
+    $deadline = (Get-Date).AddSeconds(20)
+    while ((Get-Service -Name Audiosrv).Status -ne "Running" -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 300
+    }
+    Start-Sleep -Seconds 1
 }
 
 function Enable-Privilege([string]$Name) {
@@ -121,11 +183,11 @@ function Grant-Registry([string]$Relative) {
 
 function Install-ApoFiles {
     if (Test-Path -LiteralPath $ApoDll) {
-        Write-Output "Equalizer APO is already installed."
+        Publish "Equalizer APO is already installed."
         return
     }
     $dest = Join-Path $env:TEMP $InstallerName
-    Write-Output "Downloading Equalizer APO 1.4.2"
+    Publish "Downloading Equalizer APO 1.4.2"
     & curl.exe -L --fail --retry 2 -o $dest $InstallerUrl
     $hash = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash
     if ($hash -ne $InstallerSha) { throw "installer hash mismatch" }
@@ -144,62 +206,19 @@ function Install-ApoFiles {
     if ($reg.ExitCode -ne 0) { throw "regsvr32 failed ($($reg.ExitCode))" }
 }
 
-function Register-Headphone([string]$Guid) {
-    $fxRel = "SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\$Guid\FxProperties"
-    Grant-Registry $fxRel
-    $fx = Open-Registry $fxRel "FullControl"
-    if ($null -eq $fx) { throw "cannot open headphone FxProperties" }
-    $child = [Microsoft.Win32.Registry]::LocalMachine.CreateSubKey("SOFTWARE\EqualizerAPO\Child APOs\$Guid")
-    $origSfx = $null
-    $origEfx = $null
-    foreach ($name in $ApoNames) {
-        $existing = $fx.GetValue($name)
-        if ($null -eq $existing) {
-            $child.SetValue($name, "!VALUE")
-        } else {
-            $child.SetValue($name, [string]$existing)
-            if ($name -eq $SfxName) { $origSfx = [string]$existing }
-            if ($name -eq $EfxName) { $origEfx = [string]$existing }
-        }
-    }
-    $preChild = ""
-    $postChild = ""
-    if ($origSfx -and $origSfx -ne $PreMix -and $origSfx -ne $PostMix) { $preChild = $origSfx }
-    if ($origEfx -and $origEfx -ne $PreMix -and $origEfx -ne $PostMix) { $postChild = $origEfx }
-    $child.SetValue("PreMixChild", $preChild)
-    $child.SetValue("PostMixChild", $postChild)
-    $child.SetValue("AllowSilentBufferModification", "false")
-    $child.SetValue("Version", "2")
-    foreach ($drop in @($ApoNames[0], $ApoNames[1])) {
-        if ($null -ne $fx.GetValue($drop)) { $fx.DeleteValue($drop) }
-    }
-    $fx.SetValue($SfxName, $PreMix)
-    $fx.SetValue($EfxName, $PostMix)
-    $chain13 = @($fx.GetValue($ChainSfx))
-    if ($chain13 -notcontains $PreMix) { $chain13 = @($PreMix) + $chain13 }
-    $fx.SetValue($ChainSfx, [string[]]$chain13, [Microsoft.Win32.RegistryValueKind]::MultiString)
-    $chain15 = @($fx.GetValue($ChainEfx))
-    if ($chain15 -notcontains $PostMix) { $chain15 += $PostMix }
-    $fx.SetValue($ChainEfx, [string[]]$chain15, [Microsoft.Win32.RegistryValueKind]::MultiString)
-    $disabled = "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5"
-    if ($null -ne $fx.GetValue($disabled)) { $fx.DeleteValue($disabled) }
-    $fx.Close()
-    $child.Close()
-    New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Audio" -Name "DisableProtectedAudioDG" -Value 1 -PropertyType DWord -Force | Out-Null
-}
-
 function Remove-CaptureRegistration {
     $captureRoot = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture"
     if (-not (Test-Path -LiteralPath $captureRoot)) { return }
+    $names = @($Lfx, $Gfx, $Sfx, $Mfx, $Efx, $ChainSfx, $ChainMfx, $ChainEfx)
     Get-ChildItem -LiteralPath $captureRoot | ForEach-Object {
         $rel = "SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture\$($_.PSChildName)\FxProperties"
         $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($rel, $false)
         if ($null -eq $key) { return }
         $hit = @()
-        foreach ($name in ($ApoNames + @($ChainSfx, $ChainEfx))) {
+        foreach ($name in $names) {
             $value = $key.GetValue($name)
-            if ($value -eq $PreMix -or $value -eq $PostMix) { $hit += $name }
-            if ($value -is [string[]] -and (($value -contains $PreMix) -or ($value -contains $PostMix))) { $hit += $name }
+            if ($value -eq $Pre -or $value -eq $Post) { $hit += $name }
+            if ($value -is [string[]] -and (($value -contains $Pre) -or ($value -contains $Post))) { $hit += $name }
         }
         $key.Close()
         if ($hit.Count -eq 0) { return }
@@ -208,8 +227,9 @@ function Remove-CaptureRegistration {
         foreach ($name in $hit) {
             $value = $writable.GetValue($name)
             if ($value -is [string[]]) {
-                $kept = @($value | Where-Object { $_ -ne $PreMix -and $_ -ne $PostMix })
-                $writable.SetValue($name, [string[]]$kept, [Microsoft.Win32.RegistryValueKind]::MultiString)
+                $kept = @($value | Where-Object { $_ -ne $Pre -and $_ -ne $Post })
+                if ($kept.Count -eq 0) { $writable.DeleteValue($name) }
+                else { $writable.SetValue($name, [string[]]$kept, [Microsoft.Win32.RegistryValueKind]::MultiString) }
             } else {
                 $writable.DeleteValue($name)
             }
@@ -240,22 +260,112 @@ function Write-ApoConfig([string]$AccountName) {
     & icacls.exe $ConfigDir /grant "${AccountName}:(OI)(CI)M" /T | Out-Null
 }
 
+function Get-FxSnapshot($key) {
+    $snap = @()
+    foreach ($name in @($key.GetValueNames())) {
+        $value = $key.GetValue($name)
+        if ($value -is [System.Array]) { $value = @($value.Clone()) }
+        $snap += @{ Name = $name; Kind = $key.GetValueKind($name); Value = $value }
+    }
+    return $snap
+}
+
+function Restore-FxSnapshot($key, $snap) {
+    $names = @($snap | ForEach-Object { $_.Name })
+    foreach ($name in @($key.GetValueNames())) {
+        if ($names -notcontains $name) { $key.DeleteValue($name, $false) }
+    }
+    foreach ($item in $snap) {
+        $key.SetValue($item.Name, $item.Value, $item.Kind)
+    }
+}
+
+function Remove-OurGuids($key) {
+    foreach ($name in @($Lfx, $Gfx, $Sfx, $Mfx, $Efx)) {
+        $value = $key.GetValue($name)
+        if ($value -eq $Pre -or $value -eq $Post) { $key.DeleteValue($name, $false) }
+    }
+    foreach ($name in @($ChainSfx, $ChainMfx, $ChainEfx)) {
+        if ($null -eq $key.GetValue($name)) { continue }
+        $kept = @($key.GetValue($name) | Where-Object { $_ -and $_ -ne $Pre -and $_ -ne $Post })
+        if ($kept.Count -eq 0) { $key.DeleteValue($name, $false) }
+        else { $key.SetValue($name, [string[]]$kept, [Microsoft.Win32.RegistryValueKind]::MultiString) }
+    }
+}
+
+function Add-ChainGuid($key, $name, $guid) {
+    $current = @()
+    if ($null -ne $key.GetValue($name)) { $current = @($key.GetValue($name)) }
+    $kept = @($current | Where-Object { $_ -and $_ -ne $guid })
+    $key.SetValue($name, [string[]](@($guid) + $kept), [Microsoft.Win32.RegistryValueKind]::MultiString)
+}
+
+function Set-ApoMode($fx, $child, $mode) {
+    Remove-OurGuids $fx
+    foreach ($pair in @(
+        @{ Slot = $mode.PreSlot; Guid = $Pre; Child = "PreMixChild" },
+        @{ Slot = $mode.PostSlot; Guid = $Post; Child = "PostMixChild" }
+    )) {
+        $existing = $fx.GetValue($pair.Slot)
+        if ($existing -and "$existing" -ne $Pre -and "$existing" -ne $Post) {
+            $child.SetValue($pair.Slot, "$existing")
+            $child.SetValue($pair.Child, "$existing")
+        }
+        $fx.SetValue($pair.Slot, $pair.Guid)
+    }
+    if ($mode.PreChain) { Add-ChainGuid $fx $mode.PreChain $Pre }
+    if ($mode.PostChain) { Add-ChainGuid $fx $mode.PostChain $Post }
+    $disabled = "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5"
+    if ($null -ne $fx.GetValue($disabled)) { $fx.DeleteValue($disabled, $false) }
+    $child.SetValue("AllowSilentBufferModification", "false")
+    $child.SetValue("Version", "2")
+    New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Audio" -Name "DisableProtectedAudioDG" -Value 1 -PropertyType DWord -Force | Out-Null
+}
+
 function Register-Phase([string]$Guid, [string]$AccountName) {
     if (-not (Test-Admin)) { throw "administrator rights are required" }
-    $changed = -not (Test-HeadphoneWired $Guid)
     Install-ApoFiles
-    if (-not (Test-HeadphoneWired $Guid)) {
-        Register-Headphone $Guid
-        $changed = $true
-    }
-    Remove-CaptureRegistration
+    try { Remove-CaptureRegistration } catch { Publish "Capture registration was left unchanged." }
     Write-ApoConfig $AccountName
-    if ($changed) {
-        Restart-Service -Name Audiosrv -Force
-        Write-Output "Audio service restarted so the headphone endpoint loads Equalizer APO."
-    } else {
-        Write-Output "Headphone endpoint is already wired. Audio service was left running."
+    Invoke-AudiodgProbe
+    if (Test-ApoLoaded) {
+        Publish "Equalizer APO is already loaded."
+        return
     }
+    $fxRel = "SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\$Guid\FxProperties"
+    Grant-Registry $fxRel
+    $fx = Open-Registry $fxRel "FullControl"
+    if ($null -eq $fx) { throw "cannot open headphone FxProperties" }
+    $snap = Get-FxSnapshot $fx
+    $child = [Microsoft.Win32.Registry]::LocalMachine.CreateSubKey("SOFTWARE\EqualizerAPO\Child APOs\$Guid")
+    $script:Loaded = $false
+    $script:Touched = $false
+    try {
+        foreach ($mode in $Modes) {
+            Publish "Trying $($mode.Name)"
+            Restore-FxSnapshot $fx $snap
+            Set-ApoMode $fx $child $mode
+            $script:Touched = $true
+            Restart-WindowsAudio
+            if (Wait-ApoLoaded) {
+                $script:Loaded = $true
+                Publish "Equalizer APO loaded using $($mode.Name)."
+                break
+            }
+        }
+    } finally {
+        try {
+            if (-not $script:Loaded -and $script:Touched) {
+                Restore-FxSnapshot $fx $snap
+                Restart-WindowsAudio
+                Publish "Equalizer APO did not load. Restored the previous headphone registration."
+            }
+        } finally {
+            if ($fx) { $fx.Close() }
+            if ($child) { $child.Close() }
+        }
+    }
+    if (-not $script:Loaded) { exit 1 }
 }
 
 if ($Phase -eq "register") {
@@ -266,8 +376,10 @@ if ($Phase -eq "register") {
 Set-Location -LiteralPath $Root
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) { throw "Python 3.12 or newer is required on PATH." }
-& $python.Source -m venv (Join-Path $Root ".venv")
 $venvPython = Join-Path $Root ".venv\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $venvPython)) {
+    & $python.Source -m venv (Join-Path $Root ".venv")
+}
 & $venvPython -m pip install -r (Join-Path $Root "requirements.txt")
 $detected = & $venvPython -m clarity.devices
 if ($LASTEXITCODE -ne 0 -or -not $detected) { throw "no playback device found" }
@@ -275,12 +387,16 @@ $guid = [string]$detected[0]
 $friendly = ([string[]]$detected | Select-Object -Skip 1) -join " "
 Write-Output "Headphone endpoint: $friendly"
 Write-Output "Endpoint id: $guid"
-if (Test-HeadphoneWired $guid) {
-    Write-Output "Equalizer APO is already configured for this endpoint."
+Invoke-AudiodgProbe
+if (Test-ApoLoaded) {
+    Write-Output "Equalizer APO is already loaded."
     exit 0
 }
 $account = whoami
-$argumentList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Phase register -DeviceGuid `"$guid`" -Account `"$account`""
+$result = Join-Path $env:TEMP "clarity-setup-result.txt"
+if (Test-Path -LiteralPath $result) { Remove-Item -LiteralPath $result -Force }
+$argumentList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Phase register -DeviceGuid `"$guid`" -Account `"$account`" -ResultPath `"$result`""
 $elevated = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList $argumentList
+if (Test-Path -LiteralPath $result) { Get-Content -LiteralPath $result | Write-Output }
 if ($elevated.ExitCode -ne 0) { throw "Equalizer APO setup did not finish (exit $($elevated.ExitCode))." }
 Write-Output "Setup finished."

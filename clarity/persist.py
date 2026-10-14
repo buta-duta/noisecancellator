@@ -18,22 +18,34 @@ def _ledger_path():
     return os.path.join(app_dir(), "session_ledger.json")
 
 
-def load_enabled():
+def load_state():
     path = _state_path()
     try:
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
-        return bool(data.get("enabled", False))
+        return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError, TypeError):
-        return False
+        return {}
 
 
-def save_enabled(enabled):
+def save_state(updates):
+    data = load_state()
+    data.update(updates)
     path = _state_path()
     temp = path + ".tmp"
     with open(temp, "w", encoding="utf-8") as handle:
-        json.dump({"enabled": bool(enabled)}, handle)
+        json.dump(data, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(temp, path)
+
+
+def load_enabled():
+    return bool(load_state().get("enabled", False))
+
+
+def save_enabled(enabled):
+    save_state({"enabled": bool(enabled)})
 
 
 def log(message):
