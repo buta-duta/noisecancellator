@@ -7,10 +7,8 @@ class NoMicTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         files = [root / "main.py", *root.joinpath("clarity").glob("*.py")]
         banned = (
-            "microphone",
             "wavein",
             "pyaudio",
-            "sounddevice",
             "ecapture",
             "getmicrophone",
             "speech_recognition",

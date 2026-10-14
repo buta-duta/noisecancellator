@@ -195,17 +195,19 @@ class _Host:
     def __init__(self):
         self._lock = threading.Lock()
         self._text = NOTICE_OFF
+        self._hold = DISMISS_MS
         self._ready = threading.Event()
         self._hwnd = None
         self._proc = WNDPROC(self._wndproc)
         self._thread = threading.Thread(target=self._run, name="clarity-notice", daemon=True)
         self._thread.start()
 
-    def show(self, text):
+    def show(self, text, hold_ms=None):
         if not self._ready.wait(2.0):
             return
         with self._lock:
             self._text = text
+            self._hold = int(hold_ms or DISMISS_MS)
         if self._hwnd:
             user32.PostMessageW(self._hwnd, WM_SHOW, 0, 0)
 
@@ -223,18 +225,21 @@ class _Host:
         gdi32.SelectObject(hdc, old)
         user32.ReleaseDC(self._hwnd, hdc)
         gdi32.DeleteObject(font)
-        width = max(96, int(size.cx) + 28)
-        height = max(32, int(size.cy) + 16)
         work = RECT()
         user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(work), 0)
         margin = 16
+        max_width = max(160, int(work.right - work.left) - margin * 2)
+        width = min(max(96, int(size.cx) + 28), max_width)
+        height = max(32, int(size.cy) + 16)
+        if int(size.cx) + 28 > max_width:
+            height = max(height, int(size.cy) * 2 + 20)
         x = int(work.right) - width - margin
         y = int(work.bottom) - height - margin
         region = gdi32.CreateRoundRectRgn(0, 0, width + 1, height + 1, 12, 12)
         user32.SetWindowRgn(self._hwnd, region, True)
         user32.SetWindowPos(self._hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW)
         user32.ShowWindow(self._hwnd, SW_SHOWNOACTIVATE)
-        user32.SetTimer(self._hwnd, 1, DISMISS_MS, None)
+        user32.SetTimer(self._hwnd, 1, max(400, int(self._hold)), None)
         user32.InvalidateRect(self._hwnd, None, True)
 
     def _paint(self):
@@ -278,7 +283,7 @@ class _Host:
         klass.lpszClassName = "ClarityNotice"
         user32.RegisterClassW(ctypes.byref(klass))
         self._hwnd = user32.CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             "ClarityNotice",
             "Clarity",
             WS_POPUP,
@@ -291,8 +296,10 @@ class _Host:
             instance,
             None,
         )
-        if self._hwnd:
-            user32.SetLayeredWindowAttributes(self._hwnd, 0, 235, LWA_ALPHA)
+        if not self._hwnd:
+            from clarity.persist import log
+
+            log(f"notice window failed ({ctypes.get_last_error()})")
         self._ready.set()
         message = MSG()
         while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
@@ -304,9 +311,9 @@ _host = None
 _guard = threading.Lock()
 
 
-def show_notice(text):
+def show_notice(text, hold_ms=None):
     global _host
     with _guard:
         if _host is None:
             _host = _Host()
-    _host.show(text)
+    _host.show(text, hold_ms)

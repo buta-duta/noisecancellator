@@ -14,6 +14,7 @@ from clarity.eqfile import eq_path
 from clarity.hook import KeyboardHook
 from clarity.notice import notice_label, show_notice
 from clarity.persist import load_enabled, log, save_enabled
+from clarity.report import explain, install_crash_report, set_presenter
 
 STATUS = "Outside noise is reduced by the silicone seal; this mode keeps playback clear."
 HOTKEY = "Num Lock + 8"
@@ -110,18 +111,23 @@ class App:
                 self.enabled = False
                 save_enabled(False)
                 self._refresh()
-                self._notify(message or "Equalizer APO config was not written")
+                self._report(message or "Could not save the Equalizer APO config.")
                 return
         else:
             ok, message = self.engine.stop()
             if not ok:
-                self._notify(message or "Equalizer APO config was not written")
+                self._report(message or "Could not save the Equalizer APO config.")
                 return
         self.enabled = enabled
         save_enabled(enabled)
         self._refresh()
         if notify:
             show_notice(notice_label(enabled))
+
+    def _report(self, message):
+        text = str(message or "Clarity stopped.")
+        show_notice(text, hold_ms=4500)
+        self._notify(text)
 
     def _refresh(self):
         icon = self.icon
@@ -183,6 +189,8 @@ def run_check():
 
 
 def run():
+    install_crash_report()
+    set_presenter(lambda text, hold_ms=4500: None)
     replace_existing()
     if not _single_instance():
         print("Clarity is already running")
@@ -194,14 +202,20 @@ def run():
 
     def setup(icon):
         icon.visible = True
+
+        def _show(text, hold_ms=4500):
+            show_notice(text, hold_ms)
+            try:
+                icon.notify(str(text), "Clarity")
+            except Exception as exc:
+                log(exc)
+
+        set_presenter(_show)
         try:
             hook.start(app.request_toggle)
         except Exception as exc:
             log(exc)
-            try:
-                icon.notify(str(exc).splitlines()[0][:180], "Clarity")
-            except Exception:
-                pass
+            _show(explain(exc))
             icon.stop()
             return
         if load_enabled():

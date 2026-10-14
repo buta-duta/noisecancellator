@@ -1,5 +1,6 @@
 from clarity.eqfile import write_eq
 from clarity.persist import log
+from clarity.report import explain
 
 
 class Engine:
@@ -13,7 +14,7 @@ class Engine:
             write_eq(True)
         except OSError as exc:
             self.active = False
-            self.error = str(exc).splitlines()[0][:180]
+            self.error = explain(exc)
             log(exc)
             return False, self.error
         self.active = True
@@ -25,7 +26,7 @@ class Engine:
         try:
             write_eq(False)
         except OSError as exc:
-            self.error = str(exc).splitlines()[0][:180]
+            self.error = explain(exc)
             log(exc)
             self.active = False
             return False, self.error
